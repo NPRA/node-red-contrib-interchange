@@ -3,7 +3,7 @@
   "version": "0.0.3",
   "description": "AMQP 1.0 nodes for Node-RED",
   "dependencies": {
-    "rhea": "^0.2.2"
+    "rhea": "^3.0.4"
   },
   "repository": {
     "type": "git",

@@ -39,7 +39,7 @@ module.exports = function(RED) {
         }
 
         // build options for connection
-        var options = { host: this.host, port: this.port};
+        var options = { host: this.host, hostname: this.host, port: this.port};
         if (this.username) {
             options.username = this.username;
         }
@@ -53,9 +53,16 @@ module.exports = function(RED) {
         }
         if (this.usetls && n.tls) {
             options.transport = 'tls';
+            options.enable_sasl_external = true;
             if (this.tls.credentials.cadata) {
+                //console.log(JSON.stringify(this.tls.credentials));
                 options.ca = this.tls.credentials.cadata
+                options.cert = this.tls.credentials.certdata
+                options.key = this.tls.credentials.keydata
             }
+        }
+        else if (this.usetls) {
+            options.transport = 'tls';
         }
 
         options.rejectUnauthorized = this.rejectUnauthorized;
@@ -75,6 +82,7 @@ module.exports = function(RED) {
 
             // AMQP connection not established, trying to do that
             if (!node.connected && !node.connecting) {
+                console.log(JSON.stringify(options));
 
                 node.connecting = true;
 
@@ -85,6 +93,19 @@ module.exports = function(RED) {
                     node.connecting = false;
                     node.connected = false;
                     var error = context.connection.get_error();
+                    if(error == undefined || error == null || error == '')
+                        error = context.remote.detach.error;
+                    if(error == undefined || error == null || error == '')
+                        error = 'unknown';
+                    node.error(error);
+
+                });
+
+                node.connection.on('error', function(context) {
+
+                    node.connecting = false;
+                    node.connected = false;
+                    var error = context.message + '\n' + context.condition + '\n' + context.description;
                     node.error(error);
 
                 });
@@ -100,6 +121,9 @@ module.exports = function(RED) {
                 node.connection.on('disconnected', function(context) {
 
                     node.connected = false;
+                    var error = context.connection.get_error();
+                    if(error != undefined && error != null && error != '')
+                        node.error(error);
                 });
 
             // AMQP connection already established
@@ -304,6 +328,109 @@ module.exports = function(RED) {
     }
 
     RED.nodes.registerType('amqp-receiver', amqpReceiverNode)
+
+    /**
+     * Node for AMQP delayed receiver
+     */
+    function amqpDelayedReceiverNode(config) {
+
+        RED.nodes.createNode(this, config);
+
+        // get endpoint configuration
+        this.endpoint = RED.nodes.getNode(config.endpoint);
+        // get all other configuration
+        this.address = config.address;
+        this.autoaccept = config.autoaccept;
+        this.creditwindow = config.creditwindow;
+        this.dynamic = config.dynamic;
+        this.sndsettlemode = config.sndsettlemode;
+        this.rcvsettlemode = config.rcvsettlemode;
+        this.durable = config.durable;
+        this.expirypolicy = config.expirypolicy;
+
+        if (this.dynamic)
+            this.address = undefined;
+
+        var node = this;
+        // node not yet connected
+        this.status({ fill: 'red', shape: 'dot', text: 'disconnected' });
+
+        if (this.endpoint) {
+
+            node.endpoint.connect(function(connection) {
+                setup(connection);
+            });
+
+            /**
+             * Node setup for creating receiver link
+             *
+             * @param connection    Connection instance
+             */
+            function setup(connection) {
+
+                node.connection = connection;
+
+                // node connected
+                node.status({ fill: 'green', shape: 'dot', text: 'connected' });
+
+                // build receiver options based on node configuration
+                var options = {
+                    source: {
+                        address: node.address,
+                        dynamic: node.dynamic,
+                        durable: node.durable,
+                        expiry_policy: node.expirypolicy
+                     },
+                    credit_window: node.creditwindow,
+                    autoaccept: node.autoaccept,
+                    snd_settle_mode: node.sndsettlemode,
+                    rcv_settle_mode: node.rcvsettlemode
+                };
+
+                
+
+                
+
+                node.connection.on('disconnected', function(context) {
+                    // node disconnected
+                    node.status({fill: 'red', shape: 'dot', text: 'disconnected' });
+                });
+
+                node.on('input', function(msg) {
+                    if (msg.credit) {
+                        node.receiver.flow(msg.credit);
+                    }
+                    if(msg.open) {
+                        node.receiver = node.connection.open_receiver(options);
+
+                        node.receiver.on('message', function(context) {
+                            var msg = {
+                                payload: context.message,
+                                delivery: context.delivery
+                            };
+                            node.send(msg);
+                        });
+                    } else if (msg.close) {
+                        if (node.receiver != null) {
+                            node.receiver.detach();
+                            node.receiver.close();
+                            node.receiver = null;
+                        }
+                        node.connection.close();
+                    }
+                });
+
+                node.on('close', function() {
+                    if (node.receiver != null)
+                        node.receiver.detach();
+                    node.connection.close();
+                });
+            }
+
+        }
+    }
+
+    RED.nodes.registerType('amqp-receiver-delayed', amqpDelayedReceiverNode)
 
     /**
      * Node for AMQP requester
