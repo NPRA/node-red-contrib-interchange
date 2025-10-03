@@ -46,7 +46,7 @@ module.exports = function(RED) {
         if (this.password) {
             options.password = this.password;
         }
-        if (this.container_id) {
+        if (this.container_id && this.container_id !== '') {
             options.container_id = this.container_id;
         } else {
             options.container_id = "node-red-rhea-" + container.generate_uuid();
